@@ -452,16 +452,22 @@ static int luaP_warning (lua_State *L) {
 #undef PLLUA_REPORT
 
 static int luaP_fromstring (lua_State *L) {
-  int oid = luaP_gettypeoid(luaL_checkstring(L, 1));
-  const char *s = luaL_checkstring(L, 2);
-  luaP_Typeinfo *ti = luaP_gettypeinfo(L, oid);
-  int inoid = oid;
-  Datum v;
-  /* from getTypeIOParam in lsyscache.c */
-  if (ti->type == TYPTYPE_BASE && OidIsValid(ti->elem)) inoid = ti->elem;
-  v = InputFunctionCall(&ti->input, (char *) s, inoid, 0); /* typmod = 0 */
-  luaP_pushdatum(L, v, oid);
-  return 1;
+    const char *type_name = luaL_checkstring(L, 1);
+    Oid oid = pg_to_regtype(type_name);
+    if (oid == InvalidOid) {
+        return luaL_error(L,"type \"%s\" does not exist",type_name);
+    } else {
+        const char *s = luaL_checkstring(L, 2);
+        luaP_Typeinfo *ti = luaP_gettypeinfo(L, oid);
+        Oid inoid = oid;
+        Datum v;
+
+        /* from getTypeIOParam in lsyscache.c */
+        if (ti->type == TYPTYPE_BASE && OidIsValid(ti->elem)) inoid = ti->elem;
+        v = InputFunctionCall(&ti->input, (char *) s, inoid, 0); /* typmod = 0 */
+        luaP_pushdatum(L, v, oid);
+    }
+    return 1;
 }
 
 #ifdef PLLUA_DEBUG
@@ -1095,8 +1101,18 @@ Datum luaP_todatum (lua_State *L, Oid type, int typmod, bool *isnull, int idx) {
         dat = Int32GetDatum(lua_tointeger(L, idx));
         break;
       case INT8OID:
+#ifdef USE_FLOAT8_BYVAL
         dat = Int64GetDatum(get64lua(L, idx));
         break;
+#else
+      {
+        int64* value = (int64*)SPI_palloc(sizeof(int64));
+        *value = get64lua(L, idx);
+        dat = PointerGetDatum(value);
+        break;
+      }
+#endif
+
       case TEXTOID: {
         const char *s = lua_tostring(L, idx);
         if (s == NULL) elog(ERROR,
